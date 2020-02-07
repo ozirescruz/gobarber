@@ -1,11 +1,13 @@
 import * as Yup from 'yup';
-import { startOfHour, parseISO, isBefore, format } from 'date-fns';
+import { startOfHour, parseISO, isBefore, format, subHours } from 'date-fns';
 import pt from 'date-fns/locale/pt';
 
 import User from "../models/Users";
 import Appoitment from "../models/Appoitments";
 import File from '../models/Files';
 import Notification from '../schemas/notifications'
+import Queue from '../lib/Queue';
+import CancellationEmail from '../jobs/CancellationMail';
 
 class AppoitmentController {
   async store(request, response) {
@@ -92,9 +94,48 @@ class AppoitmentController {
       ]
     });
 
-    return response.json(prestadores)
+    return response.json(prestadores);
 
+  }
+
+  async delete(request, response) {
+    const appoitment = await Appoitment.findByPk(request.params.id, {
+      include: [
+        {
+          model: User,
+          as: 'provider',
+          attributes: ['name', 'email']
+        }
+      ]
+    });
+
+    if (appoitment.user_id !== request.userId) {
+      return response.status(401).json({
+        error: 'You cant cancel the appoitment'
+      });
+
+    }
+
+
+    const limitTimeToCancel = subHours(appoitment.date);
+    if (isBefore(limitTimeToCancel, new Date())) {
+      return response.status(401).json({
+        error: 'You cant cancel 2 hours in advance'
+      });
+    }
+
+    appoitment.canceled_at = new Date();
+    await appoitment.save();
+
+    await Queue.add(CancellationEmail.key, {
+      appoitment
+    });
+
+    return response.json(appoitment);
   }
 }
 
 export default new AppoitmentController();
+
+
+
